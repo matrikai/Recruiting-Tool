@@ -6,21 +6,21 @@ import nltk
 import shutil
 from pathlib import Path
 from datetime import datetime
+import tempfile
 from fuzzywuzzy import fuzz
 from PyPDF2 import PdfReader
 from docx import Document
 from fuzzywuzzy import fuzz
-from fuzzywuzzy import process
 import io
 import json
 import os
 from google.oauth2 import service_account
+from io import StringIO
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from groq import Groq
 import ssl
 import certifi
-import httplib2
 
 
 
@@ -31,17 +31,22 @@ try:
     # st.info("SSL/TLS context created successfully.")
 except Exception as ssl_setup_error:
     st.error(f"Error setting up SSL context: {ssl_setup_error}")
-# Setting up SSL context for secure connections
-# ssl._create_default_https_context = ssl.create_default_context(cafile=certifi.where())
-# Create an Http instance with enforced SSL/TLS settings
-# httplib2.Http.force_tls_version = ssl.PROTOCOL_TLSv1_2
 
 # Authenticate Google Drive using Service Account
+
 @st.cache_resource
 def authenticate_drive():
-    SERVICE_ACCOUNT_FILE = 'C:\\Users\\User\\Documents\\GitHub\\Recruiting-Tool\\recruiting-tool-443220-eb3e27f79431.json'
-    SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
-    credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    # Retrieve the service account credentials from Streamlit Secrets
+    credentials_json = st.secrets["google"]["credentials"]  # Retrieve the JSON credentials as a string
+
+    # Load the credentials from the JSON string
+    credentials_dict = json.loads(credentials_json)
+    credentials = service_account.Credentials.from_service_account_info(credentials_dict, scopes=[
+        'https://www.googleapis.com/auth/drive.file', 
+        'https://www.googleapis.com/auth/drive'
+    ])
+    
+    # Build the Drive service
     service = build('drive', 'v3', credentials=credentials)
     return service
 
@@ -49,6 +54,7 @@ def authenticate_drive():
 if "drive_service" not in st.session_state:
     st.session_state["drive_service"] = authenticate_drive()
 drive_service = st.session_state["drive_service"]
+
 import time
 from googleapiclient.errors import HttpError
 
@@ -322,44 +328,45 @@ def main():
     # Process uploaded files
     if process_button:
         if uploaded_files:
-            temp_folder = base_dir
-            temp_folder.mkdir(parents=True, exist_ok=True)
-
             try:
-                for uploaded_file in uploaded_files:
-                    file_path = temp_folder / uploaded_file.name
-                    with open(file_path, "wb") as f:
-                        f.write(uploaded_file.getvalue())
+                # Create a temporary directory using tempfile.TemporaryDirectory
+                with tempfile.TemporaryDirectory() as temp_folder:
+                    temp_folder_path = Path(temp_folder)  # Path to the temporary directory
+                    for uploaded_file in uploaded_files:
+                        file_path = temp_folder_path / uploaded_file.name
+                        with open(file_path, "wb") as f:
+                            f.write(uploaded_file.getvalue())
 
-                    text = extract_text_from_file(str(file_path))
-                    summary = summarize_resume(text)
+                        text = extract_text_from_file(str(file_path))
+                        summary = summarize_resume(text)
 
-                    if summary:
-                        summary_data = json.loads(summary)
-                        summary_data["Date Added"] = str(datetime.now())
-                        summary_data["shortlisted"] = False
-                        summary_data["id"] = str(uuid.uuid4())
+                        if summary:
+                            summary_data = json.loads(summary)
+                            summary_data["Date Added"] = str(datetime.now())
+                            summary_data["shortlisted"] = False
+                            summary_data["id"] = str(uuid.uuid4())
 
-                        # Check for duplicates
-                        if not is_duplicate(data, summary_data["Name"], summary_data["Email"], summary_data["Phone Number"]):
-                            # Upload file to Google Drive only if not a duplicate
-                            uploaded_file_id = upload_to_drive(drive_service, resume_folder_id, str(file_path))
+                            # Check for duplicates
+                            if not is_duplicate(data, summary_data["Name"], summary_data["Email"], summary_data["Phone Number"]):
+                                # Upload file to Google Drive only if not a duplicate
+                                uploaded_file_id = upload_to_drive(drive_service, resume_folder_id, str(file_path))
 
-                            if uploaded_file_id:
-                                st.sidebar.success(f"File {uploaded_file.name} uploaded successfully to Google Drive.")
-                                summary_data["Link"] = f"https://drive.google.com/file/d/{uploaded_file_id}/view"
+                                if uploaded_file_id:
+                                    st.sidebar.success(f"File {uploaded_file.name} uploaded successfully to Google Drive.")
+                                    summary_data["Link"] = f"https://drive.google.com/file/d/{uploaded_file_id}/view"
 
-                            # Add the summary to the data
-                            data.append(summary_data)
-                            save_json(drive_service, json_folder_id, data, file_id)
-                            # st.sidebar.text_area("Summary", summary, height=300)
-                        else:
-                            st.sidebar.warning(f"Resume {uploaded_file.name} already exists in the system.")
+                                # Add the summary to the data
+                                data.append(summary_data)
+                                save_json(drive_service, json_folder_id, data, file_id)
+                                # st.sidebar.text_area("Summary", summary, height=300)
+                            else:
+                                st.sidebar.warning(f"Resume {uploaded_file.name} already exists in the system.")
             except Exception as e:
                 st.sidebar.error(f"An error occurred during processing: {e}")
             finally:
-                if temp_folder.exists():
-                    shutil.rmtree(temp_folder)
+                temp_folder_path = Path(temp_folder)  # Convert string to Path object
+                if temp_folder_path.exists() and temp_folder_path.is_dir():  # Ensure it's a directory
+                    shutil.rmtree(temp_folder_path)
         else:
             st.sidebar.warning("Please upload files to proceed.")
 

@@ -36,17 +36,9 @@ except Exception as ssl_setup_error:
 
 @st.cache_resource
 def authenticate_drive():
-    # Retrieve the service account credentials from Streamlit Secrets
-    credentials_json = st.secrets["google"]["credentials"]  # Retrieve the JSON credentials as a string
-
-    # Load the credentials from the JSON string
-    credentials_dict = json.loads(credentials_json)
-    credentials = service_account.Credentials.from_service_account_info(credentials_dict, scopes=[
-        'https://www.googleapis.com/auth/drive.file', 
-        'https://www.googleapis.com/auth/drive'
-    ])
-    
-    # Build the Drive service
+    SERVICE_ACCOUNT_FILE = 'C:\\Users\\User\\Documents\\GitHub\\Recruiting-Tool\\recruiting-tool-443220-eb3e27f79431.json'
+    SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
+    credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     service = build('drive', 'v3', credentials=credentials)
     return service
 

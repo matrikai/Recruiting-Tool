@@ -394,16 +394,18 @@ def main():
         search_results = [entry for entry in data if not entry["shortlisted"]]  # Exclude shortlisted resumes
 
         if job_title:
-            search_results = [entry for entry in search_results if fuzzy_match(job_title, entry.get("Job Title", ""), 80)]
+            search_results = [
+                entry for entry in search_results if fuzzy_match(job_title.lower(), entry.get("Job Title", "").lower(), 80)
+            ]
 
         if keywords:
             search_results = [
                 entry
                 for entry in search_results
                 if (
-                    fuzzy_match(keywords, entry.get("Skills", ""), 80)
-                    or fuzzy_match(keywords, entry.get("Highest Education", ""), 80)
-                    or fuzzy_match(keywords, str(entry.get("Years of Experience", "")), 80)
+                    fuzzy_match(keywords.lower(), entry.get("Skills", "").lower(), 80)
+                    or fuzzy_match(keywords.lower(), entry.get("Highest Education", "").lower(), 80)
+                    or fuzzy_match(keywords.lower(), str(entry.get("Years of Experience", "")).lower(), 80)
                 )
             ]
         if date_range and len(date_range) == 2:

@@ -36,9 +36,17 @@ except Exception as ssl_setup_error:
 
 @st.cache_resource
 def authenticate_drive():
-    SERVICE_ACCOUNT_FILE = 'C:\\Users\\User\\Documents\\GitHub\\Recruiting-Tool\\recruiting-tool-443220-eb3e27f79431.json'
-    SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/drive']
-    credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    # Retrieve the service account credentials from Streamlit Secrets
+    credentials_json = st.secrets["general"]["credentials"]  # Retrieve the JSON credentials as a string
+
+    # Load the credentials from the JSON string
+    credentials_dict = json.loads(credentials_json)
+    credentials = service_account.Credentials.from_service_account_info(credentials_dict, scopes=[
+        'https://www.googleapis.com/auth/drive.file', 
+        'https://www.googleapis.com/auth/drive'
+    ])
+    
+    # Build the Drive service
     service = build('drive', 'v3', credentials=credentials)
     return service
 
@@ -297,9 +305,6 @@ def main():
     resume_folder_id = '1E0Hzbfql_ARQYlzScvUsaP1biSn88-PN'
     json_folder_id = '1r-jpOI838VAAHtyDNQVpqyr0_pa7fNzy'
 
-    # Base directory for temporary files
-    base_dir = Path(os.getenv('BASE_DIR', Path.cwd())) / "temp"
-
     # Load JSON data
     data, file_id = load_json(drive_service, json_folder_id)
     data = initialize_json(data)
@@ -358,7 +363,7 @@ def main():
             finally:
                 temp_folder_path = Path(temp_folder)  # Convert string to Path object
                 if temp_folder_path.exists() and temp_folder_path.is_dir():  # Ensure it's a directory
-                    shutil.rmtree(temp_folder_path)
+                    shutil.rmtree(temp_folder_path)            
         else:
             st.sidebar.warning("Please upload files to proceed.")
 
@@ -446,4 +451,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

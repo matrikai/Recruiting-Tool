@@ -57,26 +57,28 @@ drive_service = st.session_state["drive_service"]
 
 import time
 from googleapiclient.errors import HttpError
+import logging
 
+logging.basicConfig(level=logging.ERROR)
 def execute_request_with_retry(request, retries=3):
     """Executes Google API requests with retry logic and error logging."""
     for attempt in range(retries):
         try:
             return request.execute()
         except ssl.SSLError as ssl_error:
-            st.error(f"SSL Error on attempt {attempt + 1}: {ssl_error}")
+            logging.error(f"SSL Error on attempt {attempt + 1}: {ssl_error}")
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)  # Exponential backoff
             else:
                 raise ssl_error
         except HttpError as http_error:
-            st.error(f"HTTP Error on attempt {attempt + 1}: {http_error}")
+            logging.error(f"HTTP Error on attempt {attempt + 1}: {http_error}")
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
             else:
                 raise http_error
         except Exception as e:
-            st.error(f"Unexpected error on attempt {attempt + 1}: {e}")
+            logging.error(f"Unexpected error on attempt {attempt + 1}: {e}")
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
             else:
@@ -117,7 +119,7 @@ def summarize_resume(resume_text):
     Name: 
     Job Title:
     City: 
-    Skills: 
+    Skills:
     Highest Education: 
     Years of Experience: 
     Phone Number: 
@@ -167,47 +169,59 @@ def summarize_resume(resume_text):
         print(f"Error parsing summary: {e}")
         return None
 
-def load_json(service, folder_id):
-    """Loads JSON data from Google Drive."""
-    service = st.session_state["drive_service"]
+def load_or_create_json(service, folder_id):
+    """Loads the JSON file from Google Drive or creates one if it doesn't exist."""
+    if "json_data" in st.session_state and "json_file_id" in st.session_state:
+        return st.session_state["json_data"], st.session_state["json_file_id"]
+
     try:
         results = execute_request_with_retry(
             service.files().list(q=f"'{folder_id}' in parents and trashed=false")
         )
-        files = results.get('files', [])
-        json_file = next((file for file in files if file['name'] == 'summaries.json'), None)
+        files = results.get("files", [])
+        json_file = next((file for file in files if file["name"] == "summaries.json"), None)
+
         if json_file:
-            file_id = json_file['id']
-            file_content = execute_request_with_retry(
-                service.files().get_media(fileId=file_id)
+            file_id = json_file["id"]
+            request = service.files().get_media(fileId=file_id)
+            file_content = execute_request_with_retry(request)
+            data = json.loads(file_content.decode("utf-8"))
+        else:
+            # Create a new JSON file if it doesn't exist
+            data = []
+            json_data = io.BytesIO(json.dumps(data, indent=4).encode("utf-8"))
+            file_metadata = {"name": "summaries.json", "parents": [folder_id]}
+            media = MediaIoBaseUpload(json_data, mimetype="application/json")
+            file = execute_request_with_retry(
+                service.files().create(body=file_metadata, media_body=media)
             )
-            return json.loads(file_content.decode('utf-8')), file_id
-        return [], None
+            file_id = file["id"]
+
+        # Cache the data and file ID for future use
+        st.session_state["json_data"] = data
+        st.session_state["json_file_id"] = file_id
+        return data, file_id
+
     except ssl.SSLError as ssl_error:
         st.error(f"SSL Error encountered: {ssl_error}")
         return [], None
     except Exception as e:
-        st.error(f"Error loading JSON: {e}")
+        st.error(f"Error loading or creating JSON: {e}")
         return [], None
 
 
-def save_json(service, folder_id, data, file_id=None):
-    """Saves JSON data to Google Drive."""
-    service = st.session_state["drive_service"]
+def save_json(service, folder_id, data, file_id):
+    """
+    Saves JSON data to Google Drive.
+    """
     try:
-        json_data = io.BytesIO(json.dumps(data, indent=4).encode('utf-8'))
-        file_metadata = {'name': 'summaries.json', 'parents': [folder_id]}
-        media = MediaIoBaseUpload(json_data, mimetype='application/json')
-
-        if file_id:
-            file = execute_request_with_retry(
-                service.files().update(fileId=file_id, addParents=folder_id, media_body=media)
-            )
-        else:
-            file = execute_request_with_retry(
-                service.files().create(body=file_metadata, media_body=media)
-            )
-        return file
+        json_data = io.BytesIO(json.dumps(data, indent=4).encode("utf-8"))
+        media = MediaIoBaseUpload(json_data, mimetype="application/json")
+        execute_request_with_retry(
+            service.files().update(fileId=file_id, media_body=media)
+        )
+        # Update the cached JSON data
+        st.session_state["json_data"] = data
     except ssl.SSLError as ssl_error:
         st.error(f"SSL Error encountered while saving: {ssl_error}")
     except Exception as e:
@@ -249,18 +263,23 @@ def upload_to_drive(service, folder_id, file_path):
 # Function to check if a resume is already uploaded based on matching fields
 def is_duplicate(data, name, email, phone):
     for entry in data:
-        if fuzz.ratio(entry.get("Name", ""), name) > 80 and \
-           fuzz.ratio(entry.get("Email", ""), email) > 80 and \
-           fuzz.ratio(entry.get("Phone Number", ""), phone) > 80:
+        # Convert both strings to lowercase for case-insensitive comparison
+        if fuzz.ratio(entry.get("Name", "").lower(), name.lower()) == 100 and \
+           fuzz.ratio(entry.get("Email", "").lower(), email.lower()) == 100 and \
+           fuzz.ratio(entry.get("Phone Number", "").lower(), phone.lower()) == 100:
             return True
     return False
 
 
+
 # Helper function to match with a given threshold
-def fuzzy_match(input_text, target_text, threshold=80):
-    if fuzz.partial_ratio(input_text.lower(), target_text.lower()) >= threshold:
-        return True
-    return False
+def fuzzy_match(input_str, target_str, threshold):
+    """
+    Performs a fuzzy match between two strings with a given similarity threshold.
+    """
+    if not input_str or not target_str:
+        return False
+    return fuzz.partial_ratio(str(input_str).lower(), str(target_str).lower()) >= threshold
 
 # Update JSON structure to include shortlisted field
 def initialize_json(data):
@@ -306,7 +325,7 @@ def main():
     json_folder_id = '1r-jpOI838VAAHtyDNQVpqyr0_pa7fNzy'
 
     # Load JSON data
-    data, file_id = load_json(drive_service, json_folder_id)
+    data, file_id = load_or_create_json(drive_service, json_folder_id)
     data = initialize_json(data)
 
     # Center area for search and filters
@@ -378,8 +397,15 @@ def main():
             search_results = [entry for entry in search_results if fuzzy_match(job_title, entry.get("Job Title", ""), 80)]
 
         if keywords:
-            search_results = [entry for entry in search_results if fuzzy_match(keywords, entry.get("Skills", ""), 80)]
-
+            search_results = [
+                entry
+                for entry in search_results
+                if (
+                    fuzzy_match(keywords, entry.get("Skills", ""), 80)
+                    or fuzzy_match(keywords, entry.get("Highest Education", ""), 80)
+                    or fuzzy_match(keywords, str(entry.get("Years of Experience", "")), 80)
+                )
+            ]
         if date_range and len(date_range) == 2:
             start_date, end_date = date_range
             search_results = [
